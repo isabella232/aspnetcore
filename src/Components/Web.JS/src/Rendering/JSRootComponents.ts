@@ -7,6 +7,12 @@ let nextPendingDynamicRootComponentIdentifier = 0;
 type ComponentParameters = object | null | undefined;
 
 let manager: DotNet.DotNetObject | undefined;
+let initializationCallbacks : { failedToInitialize?: (reason?: any) => void, initialized?: () => void } = {};
+let initializerPromise = new Promise<void>((resolve, reject) => {
+  initializationCallbacks.initialized = resolve;
+  initializationCallbacks.failedToInitialize = reject;
+});
+
 let jsComponentParametersByIdentifier: JSComponentParametersByIdentifier;
 
 // These are the public APIs at Blazor.rootComponents.*
@@ -19,6 +25,9 @@ export const RootComponentsFunctions = {
     // Track the container so we can use it when the component gets attached to the document via a selector
     const containerIdentifier = pendingRootComponentContainerNamePrefix + (++nextPendingDynamicRootComponentIdentifier).toString();
     pendingRootComponentContainers.set(containerIdentifier, toElement);
+
+    // Wait until the C# runtime has initialized the root components.
+    await initializerPromise;
 
     // Instruct .NET to add and render the new root component
     const componentId = await getRequiredManager().invokeMethodAsync<number>(
@@ -121,7 +130,10 @@ export function enableJSRootComponents(
   if (manager) {
     // This will only happen in very nonstandard cases where someone has multiple hosts.
     // It's up to the developer to ensure that only one of them enables dynamic root components.
-    throw new Error('Dynamic root components have already been enabled.');
+    const error = new Error('Dynamic root components have already been enabled.');
+    if(initializationCallbacks.failedToInitialize){
+      initializationCallbacks.failedToInitialize(error);
+    }
   }
 
   manager = managerInstance;
@@ -136,6 +148,9 @@ export function enableJSRootComponents(
       const parameters = jsComponentParameters[componentIdentifier];
       initializerFunc(componentIdentifier, parameters);
     }
+  }
+  if(initializationCallbacks.initialized){
+    initializationCallbacks.initialized();
   }
 }
 
